@@ -1,7 +1,11 @@
 # ChurnPulse — Random Forest Retention Studio
 
-Live demo (Streamlit Cloud): **https://churnpulse-gcr.streamlit.app**
+**Teacher / GCR live URL:** [https://churnpulse-gcr.streamlit.app](https://churnpulse-gcr.streamlit.app)
 
-The app stays online even when a local computer is off. Open that URL, wait a few seconds if it is waking up, then use Pulse / Observatory / Scoreboard / Signals / Oracle.
+This demo runs on Streamlit Community Cloud, so it stays available when your laptop is off.
 
-If the custom subdomain is taken during deploy, Streamlit will assign another `*.streamlit.app` address — use that one in your GCR submission.
+If that address is not live yet, open this one-click deploy (GitHub already connected):
+
+[Deploy ChurnPulse on Streamlit Cloud](https://share.streamlit.io/deploy?repository=Fredrick2216/churnpulse-gcr&branch=main&mainModule=app.py)
+
+When Streamlit asks for an App URL, use **`churnpulse-gcr`**. Then click **Deploy**.

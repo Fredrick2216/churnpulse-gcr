@@ -1,0 +1,16 @@
+name: Keep Streamlit awake
+
+on:
+  schedule:
+    - cron: "0 6,18 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake ChurnPulse
+        run: |
+          curl -fsSL --retry 5 --retry-delay 15 --max-time 90 \
+            https://churnpulse-gcr.streamlit.app >/dev/null \
+            || echo "App did not respond yet; deploy it on Streamlit Cloud first."

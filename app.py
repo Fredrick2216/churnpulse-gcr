@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -17,7 +18,7 @@ st.set_page_config(
     page_title="ChurnPulse · Random Forest Studio",
     page_icon="◈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 CHART_FONT = dict(color="#D7E2F2", family="Outfit, sans-serif")
@@ -25,18 +26,21 @@ CHART_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=CHART_FONT,
-    margin=dict(l=10, r=10, t=40, b=10),
-    legend=dict(bgcolor="rgba(0,0,0,0)"),
+    margin=dict(l=8, r=8, t=48, b=8),
+    legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yanchor="bottom", y=1.02),
+    autosize=True,
 )
+PLOTLY_CONFIG = {"responsive": True, "displayModeBar": False, "scrollZoom": False}
 
 
 def inject_css() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@330;400;560;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@330;400;560;700&family=IBM+Plex+Mono:wght@400;600&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 
         html, body, [class*="css"] { font-family: "Outfit", sans-serif; }
+        html, body, .stApp { overflow-x: hidden; max-width: 100%; }
 
         .stApp {
             background:
@@ -46,92 +50,134 @@ def inject_css() -> None:
             color: #E7EDF8;
         }
 
-        #MainMenu, footer, header { visibility: hidden; }
+        #MainMenu, footer { visibility: hidden; }
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            visibility: visible;
+        }
+        .material-symbols-rounded {
+            font-family: "Material Symbols Rounded", sans-serif !important;
+            font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+        }
+
+        .block-container {
+            max-width: 1280px;
+            padding-top: 1.1rem;
+            padding-bottom: 2.2rem;
+            padding-left: clamp(0.75rem, 2.2vw, 2rem);
+            padding-right: clamp(0.75rem, 2.2vw, 2rem);
+        }
 
         [data-testid="stSidebar"] {
             background: linear-gradient(180deg, #0C1224 0%, #080C16 100%);
             border-right: 1px solid rgba(62, 224, 197, 0.14);
         }
-
         [data-testid="stSidebar"] * { font-family: "Outfit", sans-serif; }
+        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 0.45rem;
+            min-height: 0;
+        }
+        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] span:first-child {
+            display: none;
+        }
+        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {
+            width: 100%;
+        }
+
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+            gap: 0.85rem 1rem;
+            align-items: stretch;
+        }
+        [data-testid="stHorizontalBlock"] > div {
+            min-width: 0;
+        }
+        [data-testid="stVerticalBlock"] { gap: 0.65rem; }
+        [data-testid="stDataFrame"], .stPlotlyChart, iframe {
+            max-width: 100%;
+        }
 
         .hero {
             position: relative;
             overflow: hidden;
-            padding: 1.35rem 1.5rem 1.2rem;
+            padding: clamp(1rem, 2vw, 1.5rem);
             border-radius: 22px;
             border: 1px solid rgba(62, 224, 197, 0.18);
-            background:
-                linear-gradient(120deg, rgba(18, 24, 42, 0.92), rgba(12, 18, 34, 0.78));
+            background: linear-gradient(120deg, rgba(18, 24, 42, 0.92), rgba(12, 18, 34, 0.78));
             box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
             margin-bottom: 1.1rem;
         }
-
         .hero::after {
             content: "";
             position: absolute;
-            width: 280px;
-            height: 280px;
+            width: min(280px, 50vw);
+            height: min(280px, 50vw);
             right: -40px;
             top: -90px;
             border-radius: 50%;
             background: radial-gradient(circle, rgba(62, 224, 197, 0.22), transparent 68%);
+            pointer-events: none;
         }
-
+        .kicker, .hero h1, .hero p { position: relative; z-index: 1; }
         .kicker {
             font-family: "IBM Plex Mono", monospace;
-            letter-spacing: 0.16em;
-            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            font-size: clamp(0.62rem, 1.6vw, 0.72rem);
             color: #3EE0C5;
             margin-bottom: 0.35rem;
         }
-
         .hero h1 {
-            font-size: 2.05rem;
-            line-height: 1.1;
-            margin: 0 0 0.35rem 0;
+            font-size: clamp(1.35rem, 3.4vw, 2.05rem);
+            line-height: 1.15;
+            margin: 0 0 0.4rem 0;
             font-weight: 700;
         }
-
         .hero h1 span { color: #3EE0C5; }
-
         .hero p {
             margin: 0;
             max-width: 720px;
             color: #A9B6CA;
-            font-size: 0.98rem;
+            font-size: clamp(0.88rem, 1.6vw, 0.98rem);
         }
 
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 0.85rem;
             margin: 0.2rem 0 1rem;
+            width: 100%;
         }
-
         .kpi {
+            min-width: 0;
             padding: 1rem 1.05rem 0.9rem;
             border-radius: 18px;
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: linear-gradient(180deg, rgba(22, 29, 52, 0.88), rgba(14, 19, 36, 0.72));
         }
-
         .kpi .label {
-            font-size: 0.74rem;
+            font-size: 0.7rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: #8EA0B8;
             font-family: "IBM Plex Mono", monospace;
         }
-
         .kpi .value {
-            font-size: 1.72rem;
+            font-size: clamp(1.2rem, 2.4vw, 1.72rem);
             font-weight: 700;
             margin-top: 0.18rem;
             color: #F4F7FB;
+            overflow-wrap: anywhere;
         }
-
-        .kpi .hint { color: #8EA0B8; font-size: 0.8rem; margin-top: 0.12rem; }
+        .kpi .hint {
+            color: #8EA0B8;
+            font-size: 0.78rem;
+            margin-top: 0.12rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .kpi.teal .value { color: #3EE0C5; }
         .kpi.violet .value { color: #B59CFF; }
         .kpi.amber .value { color: #F3C15B; }
@@ -144,7 +190,6 @@ def inject_css() -> None:
             background: rgba(16, 22, 40, 0.62);
             margin-bottom: 0.9rem;
         }
-
         .risk-chip {
             display: inline-block;
             padding: 0.28rem 0.7rem;
@@ -154,12 +199,10 @@ def inject_css() -> None:
             letter-spacing: 0.08em;
             text-transform: uppercase;
         }
-
         .risk-Critical { background: rgba(255, 122, 162, 0.18); color: #FF7AA2; }
         .risk-Elevated { background: rgba(243, 193, 91, 0.16); color: #F3C15B; }
         .risk-Watch { background: rgba(181, 156, 255, 0.16); color: #B59CFF; }
         .risk-Stable { background: rgba(62, 224, 197, 0.16); color: #3EE0C5; }
-
         .verdict {
             padding: 1.2rem;
             border-radius: 20px;
@@ -167,8 +210,7 @@ def inject_css() -> None:
             border: 1px solid rgba(62, 224, 197, 0.2);
             background: linear-gradient(180deg, rgba(18, 28, 48, 0.9), rgba(10, 16, 30, 0.8));
         }
-
-        .verdict h2 { margin: 0.15rem 0 0.35rem; font-size: 2rem; }
+        .verdict h2 { margin: 0.15rem 0 0.35rem; font-size: clamp(1.5rem, 3vw, 2rem); }
         .muted { color: #8EA0B8; }
 
         div[data-testid="stMetric"] {
@@ -177,7 +219,6 @@ def inject_css() -> None:
             padding: 0.7rem 0.8rem;
             border-radius: 14px;
         }
-
         .stButton > button {
             background: linear-gradient(90deg, #3EE0C5, #6BE8C0);
             color: #071018;
@@ -185,18 +226,34 @@ def inject_css() -> None:
             font-weight: 700;
             border-radius: 12px;
         }
-
         .stDownloadButton > button {
             border-radius: 12px;
             border: 1px solid rgba(62, 224, 197, 0.3);
             background: transparent;
             color: #3EE0C5;
+            width: 100%;
         }
-
-        [data-testid="stDataFrame"] { border-radius: 14px; overflow: hidden; }
+        iframe[height="0"] { display: none !important; height: 0 !important; }
 
         @media (max-width: 1100px) {
-            .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+            .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 900px) {
+            [data-testid="stHorizontalBlock"] { flex-direction: column !important; }
+            [data-testid="stHorizontalBlock"] > div {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            section[data-testid="stSidebar"] {
+                width: min(300px, 88vw) !important;
+                min-width: 0 !important;
+            }
+            .kpi .hint { white-space: normal; }
+        }
+        @media (max-width: 560px) {
+            .kpi-grid { grid-template-columns: 1fr; }
+            .hero { border-radius: 16px; }
+            .block-container { padding-top: 0.7rem; }
         }
         </style>
         """,
@@ -254,6 +311,10 @@ def plotly_defaults(fig: go.Figure, height: int = 360) -> go.Figure:
     fig.update_xaxes(gridcolor="rgba(255,255,255,0.06)", zeroline=False)
     fig.update_yaxes(gridcolor="rgba(255,255,255,0.06)", zeroline=False)
     return fig
+
+
+def show_chart(fig: go.Figure) -> None:
+    st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG)
 
 
 def confusion_figure(matrix, labels=("Stay", "Churn")) -> go.Figure:
@@ -437,14 +498,14 @@ def page_pulse() -> None:
         if df is not None:
             fig = cohort_figure(df)
             if fig:
-                st.plotly_chart(fig, width="stretch")
+                show_chart(fig)
             else:
                 st.dataframe(df.head(10), width="stretch")
         else:
             st.info("Load your Excel file in the sidebar, or generate the demo telecom set to explore the studio.")
     with right:
         if result:
-            st.plotly_chart(split_figure(result), width="stretch")
+            show_chart(split_figure(result))
             gap = result.accuracy_gap
             verdict = "Stable fit" if abs(gap) < 0.05 else "Possible overfit" if gap > 0.05 else "Test stronger than train"
             st.markdown(f"**Train–test gap:** `{gap:.4f}` · {verdict}")
@@ -502,7 +563,7 @@ def page_scoreboard() -> None:
 
     left, right = st.columns(2, gap="large")
     with left:
-        st.plotly_chart(confusion_figure(result.confusion), width="stretch")
+        show_chart(confusion_figure(result.confusion))
     with right:
         report_df = pd.DataFrame(result.report).T
         keep = [row for row in report_df.index if row in ("Stay", "Churn", "accuracy", "macro avg", "weighted avg")]
@@ -539,7 +600,7 @@ def page_signals() -> None:
     st.subheader("What the forest listens to")
     left, right = st.columns([1.2, 0.8], gap="large")
     with left:
-        st.plotly_chart(importance_figure(result.feature_importance), width="stretch")
+        show_chart(importance_figure(result.feature_importance))
     with right:
         st.dataframe(result.feature_importance, width="stretch", hide_index=True)
         top = result.feature_importance.iloc[0]
@@ -548,7 +609,7 @@ def page_signals() -> None:
     if df is not None:
         fig = cohort_figure(df)
         if fig:
-            st.plotly_chart(fig, width="stretch")
+            show_chart(fig)
 
 
 def page_oracle() -> None:
@@ -596,10 +657,10 @@ def page_oracle() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.plotly_chart(gauge_figure(prediction["churn_probability"]), width="stretch")
+        show_chart(gauge_figure(prediction["churn_probability"]))
     with right:
         st.markdown("**Drivers the forest weighted most**")
-        st.plotly_chart(importance_figure(prediction["contributions"][["Feature", "Importance"]].head(10)), width="stretch")
+        show_chart(importance_figure(prediction["contributions"][["Feature", "Importance"]].head(10)))
 
     playbook = {
         "Critical": "Offer a retention call in 24 hours, a contract upgrade, and a support credit.",
@@ -610,8 +671,28 @@ def page_oracle() -> None:
     st.success(playbook[band])
 
 
+def collapse_sidebar_on_phone() -> None:
+    components.html(
+        """
+        <script>
+        (function () {
+          const win = window.parent;
+          if (!win || win.innerWidth >= 900) return;
+          if (win.sessionStorage.getItem("churnpulse_sidebar") === "1") return;
+          win.sessionStorage.setItem("churnpulse_sidebar", "1");
+          const doc = win.document;
+          const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+          if (btn) btn.click();
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def main() -> None:
     inject_css()
+    collapse_sidebar_on_phone()
     init_state()
     sidebar()
     ensure_live_demo()
