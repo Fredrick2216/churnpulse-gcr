@@ -2,10 +2,6 @@
 
 **Teacher / GCR live URL:** [https://churnpulse-gcr.streamlit.app](https://churnpulse-gcr.streamlit.app)
 
-This demo runs on Streamlit Community Cloud, so it stays available when your laptop is off.
+Upload a CSV or Excel file. The app does not preload sample data. After upload it inspects your columns, trains a Random Forest, and builds charts from that file.
 
-If that address is not live yet, open this one-click deploy (GitHub already connected):
-
-[Deploy ChurnPulse on Streamlit Cloud](https://share.streamlit.io/deploy?repository=Fredrick2216/churnpulse-gcr&branch=main&mainModule=app.py)
-
-When Streamlit asks for an App URL, use **`churnpulse-gcr`**. Then click **Deploy**.
+Code: [https://github.com/Fredrick2216/churnpulse-gcr](https://github.com/Fredrick2216/churnpulse-gcr)

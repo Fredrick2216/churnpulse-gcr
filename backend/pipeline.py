@@ -29,6 +29,17 @@ DEFAULT_RF_PARAMS = {
 }
 
 ID_HINTS = ("id", "customerid", "customer_id", "userid", "user_id", "index")
+TARGET_HINTS = (
+    "churn",
+    "exited",
+    "attrition",
+    "attrited",
+    "left",
+    "target",
+    "label",
+    "outcome",
+    "class",
+)
 
 
 @dataclass
@@ -65,9 +76,26 @@ class TrainResult:
 
 def load_table(uploaded_file) -> pd.DataFrame:
     name = getattr(uploaded_file, "name", "upload").lower()
+    uploaded_file.seek(0)
     if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(uploaded_file)
-    return pd.read_csv(uploaded_file)
+    try:
+        return pd.read_csv(uploaded_file)
+    except UnicodeDecodeError:
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file, encoding="latin-1")
+
+
+def detect_target_column(df: pd.DataFrame) -> str | None:
+    lookup = {str(col).lower().replace(" ", "").replace("_", ""): col for col in df.columns}
+    for hint in TARGET_HINTS:
+        for key, original in lookup.items():
+            if hint == key or hint in key:
+                return original
+    binary = [col for col in df.columns if df[col].nunique(dropna=True) == 2]
+    if len(binary) == 1:
+        return binary[0]
+    return None
 
 
 def generate_demo_dataset(n: int = 1800, seed: int = 42) -> pd.DataFrame:
@@ -131,7 +159,7 @@ def generate_demo_dataset(n: int = 1800, seed: int = 42) -> pd.DataFrame:
     )
 
 
-def inspect_dataset(df: pd.DataFrame) -> dict[str, Any]:
+def inspect_dataset(df: pd.DataFrame, target_name: str | None = None) -> dict[str, Any]:
     dtypes = pd.DataFrame(
         {
             "Column": df.columns,
@@ -143,9 +171,10 @@ def inspect_dataset(df: pd.DataFrame) -> dict[str, Any]:
     )
     numeric = df.select_dtypes(include=["number"])
     summary = numeric.describe().T if not numeric.empty else pd.DataFrame()
+    target_name = target_name or detect_target_column(df)
     churn_rate = None
-    if "Churn" in df.columns:
-        mapped = _map_churn_series(df["Churn"])
+    if target_name and target_name in df.columns:
+        mapped = _map_churn_series(df[target_name])
         churn_rate = float(mapped.mean())
     return {
         "shape": df.shape,
@@ -155,15 +184,49 @@ def inspect_dataset(df: pd.DataFrame) -> dict[str, Any]:
         "summary": summary,
         "head": df.head(8),
         "churn_rate": churn_rate,
+        "target_name": target_name,
     }
 
 
 def _map_churn_series(series: pd.Series) -> pd.Series:
-    if pd.api.types.is_numeric_dtype(series):
-        return series.fillna(0).astype(int)
-    lowered = series.astype(str).str.strip().str.lower()
-    positive = {"yes", "y", "true", "1", "churn", "churned", "leave"}
-    return lowered.isin(positive).astype(int)
+    cleaned = series.copy()
+    if pd.api.types.is_numeric_dtype(cleaned):
+        numeric = pd.to_numeric(cleaned, errors="coerce")
+        uniques = set(numeric.dropna().unique().tolist())
+        if uniques <= {0, 1, 0.0, 1.0}:
+            return numeric.fillna(0).astype(int)
+        if len(uniques) == 2:
+            positive = max(uniques)
+            return numeric.eq(positive).astype(int)
+        return (numeric.fillna(numeric.median()) > numeric.median()).astype(int)
+
+    text = cleaned.astype(str).str.strip()
+    lowered = text.str.lower()
+    positive = {
+        "yes",
+        "y",
+        "true",
+        "1",
+        "churn",
+        "churned",
+        "leave",
+        "left",
+        "exited",
+        "attrited",
+        "attrited customer",
+        "positive",
+    }
+    if lowered.isin(positive).any():
+        return lowered.isin(positive).astype(int)
+    uniques = [value for value in text.dropna().unique().tolist() if value.lower() != "nan"]
+    if len(uniques) == 2:
+        ranked = sorted(uniques, key=lambda value: any(token in value.lower() for token in ("churn", "exit", "attrit", "leave", "yes")))
+        return text.eq(ranked[-1]).astype(int)
+    return pd.Series(0, index=series.index, dtype=int)
+
+
+def map_target_series(series: pd.Series) -> pd.Series:
+    return _map_churn_series(series)
 
 
 def _is_id_column(name: str, series: pd.Series) -> bool:
@@ -287,10 +350,13 @@ def train_random_forest(
         .reset_index(drop=True)
     )
 
+    labels = sorted(int(v) for v in y.unique())
+    names = [prepared.class_names[i] if i < len(prepared.class_names) else str(i) for i in labels]
     report = classification_report(
         y_test,
         y_pred,
-        target_names=prepared.class_names,
+        labels=labels,
+        target_names=names,
         output_dict=True,
         zero_division=0,
     )

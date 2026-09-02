@@ -6,9 +6,10 @@ import plotly.graph_objects as go
 
 from backend.pipeline import (
     DEFAULT_RF_PARAMS,
-    generate_demo_dataset,
+    detect_target_column,
     inspect_dataset,
     load_table,
+    map_target_series,
     predict_customer,
     prepare_features,
     train_random_forest,
@@ -73,17 +74,40 @@ def inject_css() -> None:
             border-right: 1px solid rgba(62, 224, 197, 0.14);
         }
         [data-testid="stSidebar"] * { font-family: "Outfit", sans-serif; }
-        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+
+        [data-testid="stFileUploader"] section {
+            padding: 0 !important;
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            display: flex !important;
             flex-direction: column !important;
             align-items: stretch !important;
-            gap: 0.45rem;
-            min-height: 0;
+            justify-content: center !important;
+            gap: 0.35rem !important;
+            min-height: 72px !important;
+            padding: 0.75rem !important;
+            background: rgba(62, 224, 197, 0.08) !important;
+            border: 1px dashed rgba(62, 224, 197, 0.38) !important;
+            border-radius: 14px !important;
         }
-        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] span:first-child {
-            display: none;
+        [data-testid="stFileUploaderDropzoneInstructions"],
+        [data-testid="stFileUploaderDropzone"] svg,
+        [data-testid="stFileUploaderDropzone"] small,
+        [data-testid="stFileUploaderDropzone"] [data-testid="stMarkdownContainer"] {
+            display: none !important;
         }
-        [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {
-            width: 100%;
+        [data-testid="stFileUploaderDropzone"] button {
+            width: 100% !important;
+            position: relative !important;
+            z-index: 2 !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        [data-testid="stFileUploaderDropzone"] button p,
+        [data-testid="stFileUploaderDropzone"] button span {
+            font-size: 0.9rem !important;
+            white-space: nowrap !important;
         }
 
         [data-testid="stHorizontalBlock"] {
@@ -261,24 +285,6 @@ def inject_css() -> None:
     )
 
 
-@st.cache_resource(show_spinner="Booting the live Random Forest demo...")
-def boot_demo():
-    df = generate_demo_dataset()
-    prepared = prepare_features(df, "Churn")
-    result = train_random_forest(prepared, DEFAULT_RF_PARAMS, test_size=0.20)
-    return df, prepared, result
-
-
-def ensure_live_demo() -> None:
-    if st.session_state.df is None:
-        df, prepared, result = boot_demo()
-        st.session_state.df = df
-        st.session_state.prepared = prepared
-        st.session_state.result = result
-        st.session_state.source_name = "demo_churn.xlsx"
-        st.session_state.file_id = "demo"
-
-
 def init_state() -> None:
     defaults = {
         "df": None,
@@ -287,6 +293,9 @@ def init_state() -> None:
         "result": None,
         "page": "Pulse",
         "file_id": None,
+        "target_name": None,
+        "ingest_error": None,
+        "uploader_nonce": 0,
         "n_estimators": DEFAULT_RF_PARAMS["n_estimators"],
         "criterion": DEFAULT_RF_PARAMS["criterion"],
         "max_depth": DEFAULT_RF_PARAMS["max_depth"],
@@ -385,29 +394,87 @@ def split_figure(result) -> go.Figure:
     return plotly_defaults(fig, 300)
 
 
-def cohort_figure(df: pd.DataFrame) -> go.Figure | None:
-    if "Churn" not in df.columns:
+def cohort_figure(df: pd.DataFrame, target_name: str | None) -> go.Figure | None:
+    if not target_name or target_name not in df.columns:
         return None
     mapped = df.copy()
-    mapped["_churn"] = (
-        mapped["Churn"].astype(str).str.lower().isin(["yes", "y", "1", "true", "churn"])
-        | pd.to_numeric(mapped["Churn"], errors="coerce").fillna(0).eq(1)
-    ).astype(int)
-    cat_cols = [c for c in mapped.select_dtypes(exclude="number").columns if c not in ("Churn", "CustomerID")]
+    mapped["_target"] = map_target_series(mapped[target_name])
+    cat_cols = [
+        col
+        for col in mapped.select_dtypes(exclude="number").columns
+        if col not in (target_name,) and mapped[col].nunique(dropna=True) <= 12
+    ]
     if not cat_cols:
         return None
-    col = "Contract" if "Contract" in cat_cols else cat_cols[0]
-    rates = mapped.groupby(col)["_churn"].mean().reset_index()
-    rates["_churn"] *= 100
-    fig = px.bar(rates, x=col, y="_churn", color="_churn", color_continuous_scale=["#7E5BFF", "#3EE0C5"])
-    fig.update_layout(title=f"Churn rate by {col}", coloraxis_showscale=False, yaxis_title="Churn %")
+    preferred = next((col for col in ("Contract", "Gender", "InternetService", "PaymentMethod") if col in cat_cols), cat_cols[0])
+    rates = mapped.groupby(preferred)["_target"].mean().reset_index()
+    rates["_target"] *= 100
+    fig = px.bar(
+        rates,
+        x=preferred,
+        y="_target",
+        color="_target",
+        color_continuous_scale=["#7E5BFF", "#3EE0C5"],
+    )
+    fig.update_layout(title=f"{target_name} rate by {preferred}", coloraxis_showscale=False, yaxis_title="Positive %")
     return plotly_defaults(fig, 340)
+
+
+def numeric_target_figure(df: pd.DataFrame, target_name: str | None) -> go.Figure | None:
+    if not target_name or target_name not in df.columns:
+        return None
+    numeric_cols = [
+        col
+        for col in df.select_dtypes(include="number").columns
+        if col != target_name and df[col].nunique(dropna=True) > 5
+    ]
+    if not numeric_cols:
+        return None
+    col = numeric_cols[0]
+    plotted = df[[col, target_name]].copy()
+    plotted["_class"] = map_target_series(plotted[target_name]).map({0: "Stay", 1: "Churn"})
+    fig = px.histogram(
+        plotted.dropna(),
+        x=col,
+        color="_class",
+        barmode="overlay",
+        opacity=0.72,
+        color_discrete_map={"Stay": "#7E5BFF", "Churn": "#3EE0C5"},
+    )
+    fig.update_layout(title=f"{col} by {target_name}", bargap=0.08)
+    return plotly_defaults(fig, 340)
+
+
+def ingest_file(uploaded, file_id_prefix: str) -> None:
+    file_id = f"{file_id_prefix}-{uploaded.name}-{uploaded.size}"
+    if st.session_state.get("file_id") == file_id:
+        return
+    try:
+        df = load_table(uploaded)
+    except Exception as exc:
+        st.session_state.ingest_error = f"Could not read that file: {exc}"
+        return
+    if df.empty or df.shape[1] < 2:
+        st.session_state.ingest_error = "The file needs at least two columns and one row of data."
+        return
+    guessed = detect_target_column(df)
+    st.session_state.df = df
+    st.session_state.source_name = uploaded.name
+    st.session_state.file_id = file_id
+    st.session_state.target_name = guessed or df.columns[-1]
+    st.session_state.result = None
+    st.session_state.prepared = None
+    st.session_state.ingest_error = None
 
 
 def train_model() -> None:
     df = st.session_state.df
+    target_name = st.session_state.target_name
     if df is None:
-        st.warning("Load a dataset first.")
+        st.warning("Upload a CSV or Excel file first.")
+        return
+    if not target_name or target_name not in df.columns:
+        st.session_state.ingest_error = "Choose a target column from the uploaded file."
         return
     params = {
         "n_estimators": st.session_state.n_estimators,
@@ -417,11 +484,23 @@ def train_model() -> None:
         "min_samples_leaf": st.session_state.min_samples_leaf,
         "random_state": 42,
     }
-    with st.spinner("Forging the Random Forest..."):
-        prepared = prepare_features(df, "Churn")
-        result = train_random_forest(prepared, params, test_size=st.session_state.test_size)
+    with st.spinner("Training Random Forest on your dataset..."):
+        try:
+            prepared = prepare_features(df, target_name)
+            result = train_random_forest(prepared, params, test_size=st.session_state.test_size)
+        except Exception as exc:
+            st.session_state.ingest_error = str(exc)
+            st.session_state.result = None
+            st.session_state.prepared = None
+            return
         st.session_state.prepared = prepared
         st.session_state.result = result
+        st.session_state.ingest_error = None
+
+
+def auto_train_if_needed() -> None:
+    if st.session_state.df is not None and st.session_state.result is None and st.session_state.target_name:
+        train_model()
 
 
 def sidebar() -> None:
@@ -429,23 +508,36 @@ def sidebar() -> None:
         st.markdown("### ◈ ChurnPulse")
         st.caption("Random Forest retention studio")
         st.divider()
-
-        uploaded = st.file_uploader("Upload Excel or CSV", type=["xlsx", "xls", "csv"])
+        st.markdown("**Upload dataset**")
+        st.caption("CSV or Excel. Charts stay empty until you upload.")
+        uploaded = st.file_uploader(
+            "Choose CSV or Excel",
+            type=["xlsx", "xls", "csv"],
+            key=f"sidebar_upload_{st.session_state.uploader_nonce}",
+            label_visibility="collapsed",
+        )
         if uploaded is not None:
-            file_id = f"{uploaded.name}-{uploaded.size}"
-            if st.session_state.get("file_id") != file_id:
-                st.session_state.df = load_table(uploaded)
-                st.session_state.source_name = uploaded.name
-                st.session_state.file_id = file_id
+            ingest_file(uploaded, "sidebar")
+
+        if st.session_state.df is not None:
+            columns = st.session_state.df.columns.tolist()
+            current = st.session_state.target_name if st.session_state.target_name in columns else columns[-1]
+            chosen = st.selectbox("Target column", columns, index=columns.index(current))
+            if chosen != st.session_state.target_name:
+                st.session_state.target_name = chosen
                 st.session_state.result = None
                 st.session_state.prepared = None
 
-        if st.button("Load demo telecom set", width="stretch"):
-            st.session_state.df = generate_demo_dataset()
-            st.session_state.source_name = "demo_churn.xlsx"
-            st.session_state.file_id = "demo"
+        if st.button("Clear dataset", width="stretch"):
+            st.session_state.df = None
+            st.session_state.source_name = None
+            st.session_state.file_id = None
+            st.session_state.target_name = None
             st.session_state.result = None
             st.session_state.prepared = None
+            st.session_state.ingest_error = None
+            st.session_state.uploader_nonce = int(st.session_state.uploader_nonce) + 1
+            st.rerun()
 
         st.divider()
         st.markdown("**Forest controls**")
@@ -456,7 +548,8 @@ def sidebar() -> None:
         st.slider("Min samples leaf", 1, 20, key="min_samples_leaf")
         st.slider("Test size", 0.10, 0.40, step=0.05, key="test_size")
 
-        if st.button("Train Random Forest", type="primary", width="stretch"):
+        if st.button("Retrain Random Forest", type="primary", width="stretch"):
+            st.session_state.result = None
             train_model()
 
         st.divider()
@@ -467,42 +560,61 @@ def sidebar() -> None:
 def page_pulse() -> None:
     df = st.session_state.df
     result = st.session_state.result
-    rows = 0 if df is None else len(df)
-    cols = 0 if df is None else df.shape[1]
-    churn_rate = inspect_dataset(df)["churn_rate"] if df is not None else None
-    accuracy = result.metrics["accuracy"] if result else None
+    target_name = st.session_state.target_name
 
     st.markdown(
         """
         <div class="hero">
             <div class="kicker">RANDOM FOREST · RETENTION INTELLIGENCE</div>
             <h1>See the customers who are about to <span>leave</span>.</h1>
-            <p>Upload the same Excel workbook you used in Colab, train the forest with your original hyperparameters, then inspect metrics, feature signals, and live risk scores in one studio.</p>
+            <p>Upload your own CSV or Excel file. Metrics, charts, and predictions are built from that file only — nothing is preloaded.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    if st.session_state.ingest_error:
+        st.error(st.session_state.ingest_error)
+
+    if df is None:
+        st.markdown(
+            '<div class="panel"><p class="muted">No dataset yet. Choose a <b>.csv</b>, <b>.xlsx</b>, or <b>.xls</b> file below or in the sidebar. Visualizations appear after upload.</p></div>',
+            unsafe_allow_html=True,
+        )
+        pulse_file = st.file_uploader(
+            "Drop your dataset here",
+            type=["xlsx", "xls", "csv"],
+            key=f"pulse_upload_{st.session_state.uploader_nonce}",
+        )
+        if pulse_file is not None:
+            ingest_file(pulse_file, "pulse")
+            st.rerun()
+        return
+
+    info = inspect_dataset(df, target_name)
+    rows = info["shape"][0]
+    cols = info["shape"][1]
+    churn_rate = info["churn_rate"]
+    accuracy = result.metrics["accuracy"] if result else None
+
     cards = "".join(
         [
-            kpi_card("Customers", f"{rows:,}" if df is not None else "—", st.session_state.source_name or "No file loaded", "teal"),
-            kpi_card("Features", str(cols) if df is not None else "—", "including target column", "violet"),
-            kpi_card("Churn rate", f"{churn_rate:.1%}" if churn_rate is not None else "—", "share already gone", "rose"),
-            kpi_card("Model accuracy", f"{accuracy:.1%}" if accuracy is not None else "Idle", "hold-out test set", "amber"),
+            kpi_card("Rows", f"{rows:,}", st.session_state.source_name or "uploaded file", "teal"),
+            kpi_card("Columns", str(cols), f"target: {target_name or 'not set'}", "violet"),
+            kpi_card("Positive rate", f"{churn_rate:.1%}" if churn_rate is not None else "—", target_name or "choose target", "rose"),
+            kpi_card("Model accuracy", f"{accuracy:.1%}" if accuracy is not None else "Training…", "hold-out test set", "amber"),
         ]
     )
     st.markdown(f'<div class="kpi-grid">{cards}</div>', unsafe_allow_html=True)
+    st.caption(f"Using **{st.session_state.source_name}** · target **{target_name}**")
 
     left, right = st.columns([1.15, 0.85], gap="large")
     with left:
-        if df is not None:
-            fig = cohort_figure(df)
-            if fig:
-                show_chart(fig)
-            else:
-                st.dataframe(df.head(10), width="stretch")
+        fig = cohort_figure(df, target_name) or numeric_target_figure(df, target_name)
+        if fig:
+            show_chart(fig)
         else:
-            st.info("Load your Excel file in the sidebar, or generate the demo telecom set to explore the studio.")
+            st.dataframe(df.head(10), width="stretch")
     with right:
         if result:
             show_chart(split_figure(result))
@@ -510,16 +622,16 @@ def page_pulse() -> None:
             verdict = "Stable fit" if abs(gap) < 0.05 else "Possible overfit" if gap > 0.05 else "Test stronger than train"
             st.markdown(f"**Train–test gap:** `{gap:.4f}` · {verdict}")
         else:
-            st.markdown('<div class="panel"><p class="muted">The forest is waiting. Set depth, trees, and split, then train.</p></div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel"><p class="muted">Model is not ready yet. Check the target column, then retrain.</p></div>', unsafe_allow_html=True)
 
 
 def page_observatory() -> None:
     df = st.session_state.df
     if df is None:
-        st.warning("Load a dataset to inspect it.")
+        st.warning("Upload a CSV or Excel file to inspect it.")
         return
 
-    info = inspect_dataset(df)
+    info = inspect_dataset(df, st.session_state.target_name)
     st.subheader("Dataset observatory")
     c1, c2, c3 = st.columns(3)
     c1.metric("Rows", f"{info['shape'][0]:,}")
@@ -546,7 +658,7 @@ def page_observatory() -> None:
 def page_scoreboard() -> None:
     result = st.session_state.result
     if result is None:
-        st.warning("Train the Random Forest to unlock the scoreboard.")
+        st.warning("Upload a dataset so the Random Forest can train.")
         return
 
     m = result.metrics
@@ -594,7 +706,7 @@ def page_signals() -> None:
     result = st.session_state.result
     df = st.session_state.df
     if result is None:
-        st.warning("Train the model to see feature signals.")
+        st.warning("Upload a dataset to see feature signals.")
         return
 
     st.subheader("What the forest listens to")
@@ -607,7 +719,7 @@ def page_signals() -> None:
         st.markdown(f"Strongest signal: **{top['Feature']}** ({top['Importance']:.3f})")
 
     if df is not None:
-        fig = cohort_figure(df)
+        fig = cohort_figure(df, st.session_state.target_name) or numeric_target_figure(df, st.session_state.target_name)
         if fig:
             show_chart(fig)
 
@@ -616,7 +728,7 @@ def page_oracle() -> None:
     prepared = st.session_state.prepared
     result = st.session_state.result
     if prepared is None or result is None:
-        st.warning("Train the forest before scoring a customer.")
+        st.warning("Upload a dataset before scoring a customer.")
         return
 
     st.subheader("Live customer oracle")
@@ -695,7 +807,7 @@ def main() -> None:
     collapse_sidebar_on_phone()
     init_state()
     sidebar()
-    ensure_live_demo()
+    auto_train_if_needed()
     page = st.session_state.page
     if page == "Pulse":
         page_pulse()
